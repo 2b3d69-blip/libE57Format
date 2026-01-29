@@ -1,4 +1,4 @@
-name: Build E57 Python 3.12 (Optimized)
+name: Build E57 Python 3.12 (Force Install)
 
 on:
   workflow_dispatch:
@@ -6,55 +6,68 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    
+
     steps:
-    - name: Checkout (Recursive)
+    - name: Checkout Repo (Recursive)
       uses: actions/checkout@v3
       with:
-        submodules: recursive # FIX: Ensures binding code is actually downloaded
+        submodules: recursive
 
     - name: Set up Python 3.12
       uses: actions/setup-python@v4
       with:
-        python-version: '3.12' # CHANGE THIS if you use 3.10 or 3.11
+        python-version: '3.12' 
 
-    - name: Install Dependencies (vcpkg)
-      # We install ONLY xerces and pybind11 to save time. 
-      # Boost is removed because it adds 30+ mins and isn't strictly required for the python binding.
+    - name: Install Build Tools
+      run: |
+        pip install pybind11 numpy setuptools wheel
+
+    - name: Install C++ Dependencies (vcpkg)
+      # We install pybind11 here too so CMake can find it easily via C++ paths
       run: |
         vcpkg install xerces-c:x64-windows pybind11:x64-windows
         vcpkg integrate install
 
-    - name: Configure CMake
-      # We force Python3_EXECUTABLE to ensure CMake doesn't "miss" the python version
+    - name: Configure CMake (Strict 3.12)
+      # We force DPython3_EXECUTABLE to ensure it uses the 3.12 we just installed
       run: >
-        cmake -S . -B build 
-        -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake 
-        -DE57_BUILD_PYTHON_BINDING=ON 
-        -DE57_BUILD_TEST=OFF 
+        cmake -S . -B build
+        -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+        -DE57_BUILD_PYTHON_BINDING=ON
+        -DE57_BUILD_TEST=OFF
+        -DE57_BUILD_VALIDATION=OFF
         -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_INSTALL_PREFIX=install_output
         -DPython3_EXECUTABLE=${{ env.pythonLocation }}\\python.exe
 
     - name: Build
       run: cmake --build build --config Release
 
-    - name: Locate and Stage Files
+    - name: Install (Gather Files)
+      # This puts the .pyd and .dll into the "install_output" folder automatically
+      run: cmake --install build --config Release
+
+    - name: Verify & Package
       shell: cmd
       run: |
-        mkdir staging
+        echo "--- SEARCHING FOR PYD ---"
+        dir /s install_output\*.pyd
         
-        echo --- Copying .pyd ---
-        for /R build %%f in (*.pyd) do copy "%%f" staging\
+        mkdir final_package
         
-        echo --- Copying Xerces DLL ---
-        copy C:\vcpkg\installed\x64-windows\bin\xerces-c*.dll staging\
+        echo "--- COPYING FILES ---"
+        # 1. Grab the .pyd from the install folder (it usually lands in lib or bin)
+        for /R install_output %%f in (*.pyd) do copy "%%f" final_package\
         
-        echo --- Staging Contents ---
-        dir staging
+        # 2. Grab the Xerces DLL from vcpkg (it is required)
+        copy C:\vcpkg\installed\x64-windows\bin\xerces-c*.dll final_package\
+        
+        echo "--- FINAL PACKAGE CONTENTS ---"
+        dir final_package
 
-    - name: Upload Binaries
+    - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: e57_python312_binaries
-        path: staging/*
+        name: e57_python312_binding
+        path: final_package/*
         if-no-files-found: error
