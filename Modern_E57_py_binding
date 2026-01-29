@@ -1,0 +1,78 @@
+name: Build Modern E57 Python Binding (Windows, Python 3.12)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repo (with submodules)
+      uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Install vcpkg dependencies
+      run: |
+        vcpkg install xerces-c:x64-windows
+        vcpkg install boost:x64-windows
+        vcpkg install zlib:x64-windows
+        vcpkg install pybind11:x64-windows
+        vcpkg integrate install
+
+    - name: Configure CMake
+      run: >
+        cmake -S . -B build
+        -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+        -DE57_BUILD_PYTHON_BINDING=ON
+        -DCMAKE_BUILD_TYPE=Release
+        -DPython3_EXECUTABLE=${{ env.pythonLocation }}\\python.exe
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Locate build outputs
+      shell: cmd
+      run: |
+        mkdir staging
+
+        echo --- Searching for .pyd ---
+        dir /s /b build\*.pyd > found_pyd.txt
+        type found_pyd.txt
+
+        echo --- Searching for Xerces DLL ---
+        dir /s /b C:\vcpkg\installed\x64-windows\bin\*.dll > found_dlls.txt
+        findstr /i "xerces" found_dlls.txt > xerces_loc.txt
+        type xerces_loc.txt
+
+        echo --- Copying files ---
+        for /F "tokens=*" %%A in (found_pyd.txt) do copy "%%A" staging\
+        for /F "tokens=*" %%B in (xerces_loc.txt) do copy "%%B" staging\
+
+        echo --- Final staging contents ---
+        dir staging
+
+    - name: Build wheel
+      run: |
+        pip install build
+        python -m build --wheel --outdir dist
+
+    - name: Upload wheel
+      uses: actions/upload-artifact@v4
+      with:
+        name: e57_wheel_python312
+        path: dist/*.whl
+        if-no-files-found: error
+
+    - name: Upload raw binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: e57_raw_binaries
+        path: staging/*
+        if-no-files-found: error
