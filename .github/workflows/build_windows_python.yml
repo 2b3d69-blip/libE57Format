@@ -9,21 +9,22 @@ jobs:
     
     steps:
     - uses: actions/checkout@v3
-    
+      with:
+        submodules: recursive  # <--- CRITICAL FIX: Downloads missing C++ parts
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10' # Ensure this matches your local Python version
+        python-version: '3.10' # Must match your local python
         
-    - name: Install Python Dependencies
-      run: pip install pybind11 numpy
-
-    - name: Install Xerces-C (via vcpkg)
+    - name: Install Dependencies (vcpkg)
+      # We install pybind11 HERE to ensure CMake finds it 100%
       run: |
-        vcpkg install xerces-c:x64-windows
+        vcpkg install xerces-c:x64-windows pybind11:x64-windows
         vcpkg integrate install
 
     - name: Configure CMake
+      # We verify that Python bindings are enabled
       run: >
         cmake -S . -B build 
         -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake 
@@ -34,28 +35,30 @@ jobs:
     - name: Build
       run: cmake --build build --config Release
 
-    # FIX: Create a 'staging' folder and find the files wherever they are hiding
-    - name: Hunt Down and Collect Files
+    - name: Hunt Down Files (Debug & Collect)
       shell: cmd
       run: |
         mkdir staging
         
-        echo "Searching for .pyd files..."
-        dir /s /b build\*.pyd > found.txt
-        type found.txt
+        echo "--- SEARCHING FOR .PYD FILES ---"
+        dir /s /b build\*.pyd > found_pyd.txt
+        type found_pyd.txt
         
-        echo "Copying .pyd files to staging..."
-        for /F "tokens=*" %%A in (found.txt) do copy "%%A" staging\
+        echo "--- SEARCHING FOR XERCES DLL ---"
+        dir /s /b C:\vcpkg\*.dll > found_dll.txt
+        findstr "xerces-c" found_dll.txt > xerces_loc.txt
+        type xerces_loc.txt
+
+        echo "--- COPYING ---"
+        for /F "tokens=*" %%A in (found_pyd.txt) do copy "%%A" staging\
+        for /F "tokens=*" %%B in (xerces_loc.txt) do copy "%%B" staging\
         
-        echo "Copying Xerces DLL to staging..."
-        copy C:\vcpkg\installed\x64-windows\bin\xerces-c*.dll staging\
-        
-        echo "Staging folder contents:"
+        echo "--- FINAL CONTENTS ---"
         dir staging
 
     - name: Upload Complete Package
       uses: actions/upload-artifact@v4
       with:
-        name: e57_python_binding_final
+        name: e57_python_binding_fixed
         path: staging/*
         if-no-files-found: error
