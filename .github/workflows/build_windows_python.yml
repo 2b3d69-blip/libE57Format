@@ -34,18 +34,28 @@ jobs:
     - name: Build
       run: cmake --build build --config Release
 
-    # FIX: Copy the DLL from the system folder into our local build folder
-    - name: Collect Binaries
+    # FIX: Create a 'staging' folder and find the files wherever they are hiding
+    - name: Hunt Down and Collect Files
       shell: cmd
       run: |
-        copy C:\vcpkg\installed\x64-windows\bin\xerces-c*.dll build\Release\
+        mkdir staging
+        
+        echo "Searching for .pyd files..."
+        dir /s /b build\*.pyd > found.txt
+        type found.txt
+        
+        echo "Copying .pyd files to staging..."
+        for /F "tokens=*" %%A in (found.txt) do copy "%%A" staging\
+        
+        echo "Copying Xerces DLL to staging..."
+        copy C:\vcpkg\installed\x64-windows\bin\xerces-c*.dll staging\
+        
+        echo "Staging folder contents:"
+        dir staging
 
-    # Now we upload everything from the safe "build/Release" folder
-    - name: Locate and Upload Artifacts
+    - name: Upload Complete Package
       uses: actions/upload-artifact@v4
       with:
-        name: e57_python_binding_complete
-        path: |
-          build/Release/*.pyd
-          build/Release/*.dll
+        name: e57_python_binding_final
+        path: staging/*
         if-no-files-found: error
