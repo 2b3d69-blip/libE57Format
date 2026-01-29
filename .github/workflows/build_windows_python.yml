@@ -1,4 +1,4 @@
-name: Build E57 Python Binding (Windows)
+name: Build E57 Python 3.12 (Optimized)
 
 on:
   workflow_dispatch:
@@ -8,57 +8,53 @@ jobs:
     runs-on: windows-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout (Recursive)
+      uses: actions/checkout@v3
       with:
-        submodules: recursive  # <--- CRITICAL FIX: Downloads missing C++ parts
+        submodules: recursive # FIX: Ensures binding code is actually downloaded
 
-    - name: Set up Python
+    - name: Set up Python 3.12
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10' # Must match your local python
-        
+        python-version: '3.12' # CHANGE THIS if you use 3.10 or 3.11
+
     - name: Install Dependencies (vcpkg)
-      # We install pybind11 HERE to ensure CMake finds it 100%
+      # We install ONLY xerces and pybind11 to save time. 
+      # Boost is removed because it adds 30+ mins and isn't strictly required for the python binding.
       run: |
         vcpkg install xerces-c:x64-windows pybind11:x64-windows
         vcpkg integrate install
 
     - name: Configure CMake
-      # We verify that Python bindings are enabled
+      # We force Python3_EXECUTABLE to ensure CMake doesn't "miss" the python version
       run: >
         cmake -S . -B build 
         -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake 
         -DE57_BUILD_PYTHON_BINDING=ON 
         -DE57_BUILD_TEST=OFF 
         -DCMAKE_BUILD_TYPE=Release
+        -DPython3_EXECUTABLE=${{ env.pythonLocation }}\\python.exe
 
     - name: Build
       run: cmake --build build --config Release
 
-    - name: Hunt Down Files (Debug & Collect)
+    - name: Locate and Stage Files
       shell: cmd
       run: |
         mkdir staging
         
-        echo "--- SEARCHING FOR .PYD FILES ---"
-        dir /s /b build\*.pyd > found_pyd.txt
-        type found_pyd.txt
+        echo --- Copying .pyd ---
+        for /R build %%f in (*.pyd) do copy "%%f" staging\
         
-        echo "--- SEARCHING FOR XERCES DLL ---"
-        dir /s /b C:\vcpkg\*.dll > found_dll.txt
-        findstr "xerces-c" found_dll.txt > xerces_loc.txt
-        type xerces_loc.txt
-
-        echo "--- COPYING ---"
-        for /F "tokens=*" %%A in (found_pyd.txt) do copy "%%A" staging\
-        for /F "tokens=*" %%B in (xerces_loc.txt) do copy "%%B" staging\
+        echo --- Copying Xerces DLL ---
+        copy C:\vcpkg\installed\x64-windows\bin\xerces-c*.dll staging\
         
-        echo "--- FINAL CONTENTS ---"
+        echo --- Staging Contents ---
         dir staging
 
-    - name: Upload Complete Package
+    - name: Upload Binaries
       uses: actions/upload-artifact@v4
       with:
-        name: e57_python_binding_fixed
+        name: e57_python312_binaries
         path: staging/*
         if-no-files-found: error
