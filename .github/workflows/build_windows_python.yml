@@ -1,7 +1,7 @@
 name: Build E57 Python Binding (Windows)
 
 on:
-  workflow_dispatch:  # Allows you to click a button to start the build
+  workflow_dispatch:
 
 jobs:
   build:
@@ -13,7 +13,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10' # CHANGE THIS to match your local python version (e.g. 3.9, 3.11)
+        python-version: '3.10' # Ensure this matches your local Python version
         
     - name: Install Python Dependencies
       run: pip install pybind11 numpy
@@ -24,7 +24,6 @@ jobs:
         vcpkg integrate install
 
     - name: Configure CMake
-      # We explicitly enable Python bindings and point to the toolchain
       run: >
         cmake -S . -B build 
         -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake 
@@ -35,9 +34,12 @@ jobs:
     - name: Build
       run: cmake --build build --config Release
 
-    - name: Locate and Upload Artifact
+    # THIS IS THE NEW PART: It finds the DLL and bundles it!
+    - name: Locate and Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: e57_python_binding
-        path: build/Release/e57.pyd
+        name: e57_python_binding_complete
+        path: |
+          build/Release/e57.pyd
+          C:/vcpkg/installed/x64-windows/bin/xerces-c*.dll
         if-no-files-found: error
