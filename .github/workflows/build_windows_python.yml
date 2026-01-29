@@ -1,4 +1,4 @@
-name: Debug Build E57 Python 3.12
+name: Build E57 Python 3.12 (Ninja + Hardcoded Paths)
 
 on:
   workflow_dispatch:
@@ -18,63 +18,53 @@ jobs:
       with:
         python-version: '3.12' 
 
-    - name: Install Python Build Tools
-      # We install pybind11 via PIP so it lives inside the Python 3.12 folder
+    - name: Install Ninja & Tools
       run: |
-        pip install pybind11 numpy setuptools wheel
+        choco install ninja
+        pip install pybind11 numpy
 
-    - name: Install Xerces-C (vcpkg)
-      # We ONLY use vcpkg for the C++ library (Xerces)
+    - name: Install Xerces & Pybind11 (vcpkg)
+      # We install both here. Ninja needs vcpkg to find them.
       run: |
-        vcpkg install xerces-c:x64-windows
+        vcpkg install xerces-c:x64-windows pybind11:x64-windows
         vcpkg integrate install
 
-    - name: Locate Python Paths
-      id: py_info
-      shell: python
-      run: |
-        import sys
-        import os
-        import pybind11
-        print(f"PYTHON_EXEC={sys.executable}")
-        print(f"PYTHON_ROOT={os.path.dirname(sys.executable)}")
-        print(f"PYBIND11_PATH={pybind11.get_cmake_dir()}")
-        # Save these to GitHub Env Vars so CMake can see them
-        with open(os.environ['GITHUB_ENV'], 'a') as f:
-            f.write(f"PYTHON3_ROOT_DIR={os.path.dirname(sys.executable)}\n")
-            f.write(f"pybind11_DIR={pybind11.get_cmake_dir()}\n")
-
-    - name: Configure CMake (Force Python)
-      # We explicitly point to the pip-installed pybind11 and the python root
+    - name: Configure CMake (Hard-Coded Paths)
+      # We assume the standard GitHub Actions Python path structure
+      # We force -G "Ninja" to avoid Visual Studio confusion
       run: >
-        cmake -S . -B build
+        cmake -S . -B build -G "Ninja"
         -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
         -DE57_BUILD_PYTHON_BINDING=ON
         -DE57_BUILD_TEST=OFF
-        -DE57_BUILD_VALIDATION=OFF
         -DCMAKE_BUILD_TYPE=Release
-        -DPython3_ROOT_DIR="${{ env.PYTHON3_ROOT_DIR }}"
-        -DPython3_EXECUTABLE="${{ env.pythonLocation }}\\python.exe"
-        -Dpybind11_DIR="${{ env.pybind11_DIR }}"
+        -DPython3_EXECUTABLE="${{ env.pythonLocation }}\python.exe"
+        -DPython3_INCLUDE_DIR="${{ env.pythonLocation }}\include"
+        -DPython3_LIBRARY="${{ env.pythonLocation }}\libs\python312.lib"
+        -DPython3_NumPy_INCLUDE_DIR="${{ env.pythonLocation }}\Lib\site-packages\numpy\core\include"
+
+    - name: Check Configuration (Debug)
+      # This will print the log. IF THIS SAYS "Python bindings disabled", we know why.
+      shell: cmd
+      run: |
+        type build\CMakeCache.txt | findstr "E57_BUILD_PYTHON"
+        type build\CMakeCache.txt | findstr "Python3"
 
     - name: Build
       run: cmake --build build --config Release
 
-    - name: GLOBAL SEARCH for PYD
+    - name: Locate Output
       shell: cmd
-      # This searches the entire D: drive workspace for ANY .pyd file
       run: |
-        echo "--- SEARCHING EVERYWHERE ---"
-        cd D:\a
-        dir /s /b *.pyd
+        echo "--- SEARCHING FOR PYD ---"
+        dir /s /b build\*.pyd
         
-        echo "--- GATHERING FILES ---"
         mkdir staging
         
-        REM Copy any found .pyd file to staging
-        for /R D:\a %%f in (*.pyd) do copy "%%f" staging\
+        REM Ninja usually puts output directly in 'build', not 'build/Release'
+        for /R build %%f in (*.pyd) do copy "%%f" staging\
         
-        REM Copy the Xerces DLL
+        REM Grab the DLL
         copy C:\vcpkg\installed\x64-windows\bin\xerces-c*.dll staging\
         
         echo "--- STAGING CONTENTS ---"
@@ -83,6 +73,6 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: e57_debug_package
-        path: D:/a/libE57Format/libE57Format/staging/*
+        name: e57_ninja_build
+        path: staging/*
         if-no-files-found: error
