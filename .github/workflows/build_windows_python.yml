@@ -34,12 +34,18 @@ jobs:
     - name: Build
       run: cmake --build build --config Release
 
-    # THIS IS THE NEW PART: It finds the DLL and bundles it!
+    # FIX: Copy the DLL from the system folder into our local build folder
+    - name: Collect Binaries
+      shell: cmd
+      run: |
+        copy C:\vcpkg\installed\x64-windows\bin\xerces-c*.dll build\Release\
+
+    # Now we upload everything from the safe "build/Release" folder
     - name: Locate and Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: e57_python_binding_complete
         path: |
-          build/Release/e57.pyd
-          C:/vcpkg/installed/x64-windows/bin/xerces-c*.dll
+          build/Release/*.pyd
+          build/Release/*.dll
         if-no-files-found: error
