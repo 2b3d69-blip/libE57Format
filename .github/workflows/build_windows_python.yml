@@ -1,0 +1,43 @@
+name: Build E57 Python Binding (Windows)
+
+on:
+  workflow_dispatch:  # Allows you to click a button to start the build
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10' # CHANGE THIS to match your local python version (e.g. 3.9, 3.11)
+        
+    - name: Install Python Dependencies
+      run: pip install pybind11 numpy
+
+    - name: Install Xerces-C (via vcpkg)
+      run: |
+        vcpkg install xerces-c:x64-windows
+        vcpkg integrate install
+
+    - name: Configure CMake
+      # We explicitly enable Python bindings and point to the toolchain
+      run: >
+        cmake -S . -B build 
+        -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake 
+        -DE57_BUILD_PYTHON_BINDING=ON 
+        -DE57_BUILD_TEST=OFF 
+        -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Locate and Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: e57_python_binding
+        path: build/Release/e57.pyd
+        if-no-files-found: error
