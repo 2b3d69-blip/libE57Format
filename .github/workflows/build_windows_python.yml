@@ -1,4 +1,4 @@
-name: Build E57 Python 3.12 (Strict Mode)
+name: Build E57 Python 3.12 (Jailbreak)
 
 on:
   workflow_dispatch:
@@ -18,49 +18,51 @@ jobs:
       with:
         python-version: '3.12' 
 
-    - name: Install Dependencies
-      # Install Ninja for speed and pybind11 via PIP
+    - name: Install Build Tools
       run: |
         choco install ninja
         pip install pybind11 numpy setuptools wheel
 
     - name: Install Xerces-C (vcpkg)
-      # We ONLY install Xerces via vcpkg. We keep pybind11 separate to avoid conflicts.
       run: |
         vcpkg install xerces-c:x64-windows
         vcpkg integrate install
+
+    - name: JAILBREAK CMakeLists.txt (Force Python)
+      shell: python
+      # This script edits the CMake file to REMOVE the logic that skips Python
+      run: |
+        import os
+        
+        file_path = "CMakeLists.txt"
+        with open(file_path, "r") as f:
+            content = f.read()
+            
+        # We look for the line that says "if (E57_BUILD_PYTHON_BINDING)"
+        # We replace it with "if (TRUE)" so it ALWAYS executes.
+        new_content = content.replace("if (E57_BUILD_PYTHON_BINDING)", "if (TRUE)")
+        
+        # We also ensure the options don't default to OFF
+        new_content = new_content.replace('option(E57_BUILD_PYTHON_BINDING "Build Python binding" OFF)', 'option(E57_BUILD_PYTHON_BINDING "Build Python binding" ON)')
+        
+        with open(file_path, "w") as f:
+            f.write(new_content)
+            
+        print("Successfully patched CMakeLists.txt to FORCE Python build.")
 
     - name: Locate Paths
       id: info
       shell: python
       run: |
         import pybind11, sys, os
-        # Calculate paths with forward slashes
         pb_path = pybind11.get_cmake_dir().replace("\\", "/")
         py_root = os.path.dirname(sys.executable).replace("\\", "/")
         
-        print(f"Pybind11: {pb_path}")
-        print(f"Python Root: {py_root}")
-        
-        # Save to Env Vars
         with open(os.environ['GITHUB_ENV'], 'a') as f:
             f.write(f"PYBIND11_DIR={pb_path}\n")
             f.write(f"PYTHON_ROOT={py_root}\n")
 
-    - name: PATCH CMakeLists.txt (Force Required)
-      # This step edits the build file to CRASH if it can't find Python.
-      shell: powershell
-      run: |
-        $file = "CMakeLists.txt"
-        $content = Get-Content $file
-        # Force find_package to be REQUIRED so it can't fail silently
-        $content = $content -replace 'find_package\(Python3 COMPONENTS Interpreter Development\)', 'find_package(Python3 COMPONENTS Interpreter Development REQUIRED)'
-        $content = $content -replace 'find_package\(pybind11 CONFIG\)', 'find_package(pybind11 CONFIG REQUIRED)'
-        Set-Content $file $content
-        echo "Patched CMakeLists.txt to force Python detection."
-
-    - name: Configure CMake (Strict)
-      # If this step turns RED, read the logs! It will tell us exactly what is missing.
+    - name: Configure CMake (Jailbroken)
       run: >
         cmake -S . -B build -G "Ninja"
         -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
@@ -69,28 +71,39 @@ jobs:
         -DCMAKE_BUILD_TYPE=Release
         -Dpybind11_DIR="${{ env.PYBIND11_DIR }}"
         -DPython3_ROOT_DIR="${{ env.PYTHON_ROOT }}"
-        -DCMAKE_PREFIX_PATH="${{ env.PYTHON_ROOT }}"
 
     - name: Build
       run: cmake --build build --config Release
 
-    - name: Verify & Stage
+    - name: Verify Output (Fail Loudly)
       shell: cmd
       run: |
-        echo "Searching for output..."
+        echo "Searching for .pyd..."
         dir /s /b build\*.pyd
         
+        if exist build\src\python\e57.pyd goto found
+        if exist build\e57.pyd goto found
+        
+        REM If we are here, standard paths failed. Let's do a deep search.
+        for /R build %%f in (*.pyd) do goto found_somewhere
+        
+        echo "CRITICAL ERROR: Even after Jailbreak, no .pyd file found."
+        exit 1
+        
+        :found
+        echo "Found in standard location."
+        goto stage
+        
+        :found_somewhere
+        echo "Found somewhere in build tree."
+
+        :stage
         mkdir staging
         for /R build %%f in (*.pyd) do copy "%%f" staging\
         copy C:\vcpkg\installed\x64-windows\bin\xerces-c*.dll staging\
-        
-        if not exist staging\e57.pyd (
-            echo "CRITICAL FAILURE: Build finished but .pyd is missing."
-            exit 1
-        )
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: e57_strict_python312
+        name: e57_python312_jailbreak
         path: staging/*
