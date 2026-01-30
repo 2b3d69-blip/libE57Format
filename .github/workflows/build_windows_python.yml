@@ -1,4 +1,4 @@
-name: Build E57 Python (Bulletproof 3.12)
+name: Build E57 Python 3.12 (Strict Mode)
 
 on:
   workflow_dispatch:
@@ -18,43 +18,49 @@ jobs:
       with:
         python-version: '3.12' 
 
-    - name: Install Build Tools
+    - name: Install Dependencies
+      # Install Ninja for speed and pybind11 via PIP
       run: |
         choco install ninja
         pip install pybind11 numpy setuptools wheel
 
     - name: Install Xerces-C (vcpkg)
+      # We ONLY install Xerces via vcpkg. We keep pybind11 separate to avoid conflicts.
       run: |
         vcpkg install xerces-c:x64-windows
         vcpkg integrate install
 
-    - name: Calculate Exact Paths
-      id: paths
+    - name: Locate Paths
+      id: info
       shell: python
       run: |
-        import pybind11
-        import sys
-        import os
-        
-        # 1. Find Pybind11 CMake folder
+        import pybind11, sys, os
+        # Calculate paths with forward slashes
         pb_path = pybind11.get_cmake_dir().replace("\\", "/")
-        
-        # 2. Find Python Executable and Root
-        py_exec = sys.executable.replace("\\", "/")
         py_root = os.path.dirname(sys.executable).replace("\\", "/")
         
-        print(f"Pybind11 DIR: {pb_path}")
-        print(f"Python EXEC:  {py_exec}")
-        print(f"Python ROOT:  {py_root}")
+        print(f"Pybind11: {pb_path}")
+        print(f"Python Root: {py_root}")
         
-        # 3. Save to Env Vars for CMake
+        # Save to Env Vars
         with open(os.environ['GITHUB_ENV'], 'a') as f:
             f.write(f"PYBIND11_DIR={pb_path}\n")
-            f.write(f"PYTHON_EXEC={py_exec}\n")
             f.write(f"PYTHON_ROOT={py_root}\n")
 
-    - name: Configure CMake (Hard-Coded)
-      # We pass ALL 3 paths explicitly to prevent "not found" errors
+    - name: PATCH CMakeLists.txt (Force Required)
+      # This step edits the build file to CRASH if it can't find Python.
+      shell: powershell
+      run: |
+        $file = "CMakeLists.txt"
+        $content = Get-Content $file
+        # Force find_package to be REQUIRED so it can't fail silently
+        $content = $content -replace 'find_package\(Python3 COMPONENTS Interpreter Development\)', 'find_package(Python3 COMPONENTS Interpreter Development REQUIRED)'
+        $content = $content -replace 'find_package\(pybind11 CONFIG\)', 'find_package(pybind11 CONFIG REQUIRED)'
+        Set-Content $file $content
+        echo "Patched CMakeLists.txt to force Python detection."
+
+    - name: Configure CMake (Strict)
+      # If this step turns RED, read the logs! It will tell us exactly what is missing.
       run: >
         cmake -S . -B build -G "Ninja"
         -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
@@ -63,35 +69,28 @@ jobs:
         -DCMAKE_BUILD_TYPE=Release
         -Dpybind11_DIR="${{ env.PYBIND11_DIR }}"
         -DPython3_ROOT_DIR="${{ env.PYTHON_ROOT }}"
-        -DPython3_EXECUTABLE="${{ env.PYTHON_EXEC }}"
+        -DCMAKE_PREFIX_PATH="${{ env.PYTHON_ROOT }}"
 
     - name: Build
       run: cmake --build build --config Release
 
-    - name: Verify Output (Fail Loudly)
+    - name: Verify & Stage
       shell: cmd
       run: |
-        echo "Searching for .pyd..."
+        echo "Searching for output..."
         dir /s /b build\*.pyd
         
-        if exist build\src\python\e57.pyd goto found
-        if exist build\e57.pyd goto found
-        
-        echo "ERROR: Still no .pyd file! Check the logs above."
-        exit 1
-        
-        :found
-        echo "SUCCESS: File exists!"
-
-    - name: Stage Files
-      shell: cmd
-      run: |
         mkdir staging
         for /R build %%f in (*.pyd) do copy "%%f" staging\
         copy C:\vcpkg\installed\x64-windows\bin\xerces-c*.dll staging\
+        
+        if not exist staging\e57.pyd (
+            echo "CRITICAL FAILURE: Build finished but .pyd is missing."
+            exit 1
+        )
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: e57_python312_bulletproof
+        name: e57_strict_python312
         path: staging/*
