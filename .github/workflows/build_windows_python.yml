@@ -1,4 +1,4 @@
-name: Build E57 Python 3.12 (Ninja + Hardcoded Paths)
+name: Build E57 Python (Diagnostic Mode)
 
 on:
   workflow_dispatch:
@@ -18,61 +18,67 @@ jobs:
       with:
         python-version: '3.12' 
 
-    - name: Install Ninja & Tools
+    - name: Install Ninja & Dependencies
       run: |
         choco install ninja
         pip install pybind11 numpy
 
-    - name: Install Xerces & Pybind11 (vcpkg)
-      # We install both here. Ninja needs vcpkg to find them.
+    - name: Install Xerces-C (vcpkg)
       run: |
-        vcpkg install xerces-c:x64-windows pybind11:x64-windows
+        vcpkg install xerces-c:x64-windows
         vcpkg integrate install
 
-    - name: Configure CMake (Hard-Coded Paths)
-      # We assume the standard GitHub Actions Python path structure
-      # We force -G "Ninja" to avoid Visual Studio confusion
+    - name: Configure CMake (Verbose)
+      # We force 'Ninja' for speed and better error reporting
+      # We explicitly print debug info
       run: >
         cmake -S . -B build -G "Ninja"
         -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
         -DE57_BUILD_PYTHON_BINDING=ON
         -DE57_BUILD_TEST=OFF
+        -DE57_BUILD_VALIDATION=OFF
         -DCMAKE_BUILD_TYPE=Release
         -DPython3_EXECUTABLE="${{ env.pythonLocation }}\python.exe"
-        -DPython3_INCLUDE_DIR="${{ env.pythonLocation }}\include"
-        -DPython3_LIBRARY="${{ env.pythonLocation }}\libs\python312.lib"
-        -DPython3_NumPy_INCLUDE_DIR="${{ env.pythonLocation }}\Lib\site-packages\numpy\core\include"
 
-    - name: Check Configuration (Debug)
-      # This will print the log. IF THIS SAYS "Python bindings disabled", we know why.
+    - name: CHECK CONFIGURATION LOGS
       shell: cmd
       run: |
-        type build\CMakeCache.txt | findstr "E57_BUILD_PYTHON"
-        type build\CMakeCache.txt | findstr "Python3"
+        echo "-----------------------------------------------------"
+        echo "SEARCHING LOGS FOR PYTHON STATUS:"
+        type build\CMakeCache.txt | findstr /i "PYTHON"
+        echo "-----------------------------------------------------"
 
     - name: Build
       run: cmake --build build --config Release
 
-    - name: Locate Output
+    - name: VERIFY OUTPUT (Fail if Missing)
       shell: cmd
       run: |
-        echo "--- SEARCHING FOR PYD ---"
+        echo "Searching for .pyd file..."
         dir /s /b build\*.pyd
         
+        if exist build\src\python\e57.pyd (
+            echo "SUCCESS: Found e57.pyd in src/python"
+        ) else (
+            if exist build\e57.pyd (
+                echo "SUCCESS: Found e57.pyd in root"
+            ) else (
+                echo "ERROR: NO .PYD FILE FOUND. BUILD FAILED SILENTLY."
+                exit 1
+            )
+        )
+
+    - name: Stage and Upload
+      if: success()
+      shell: cmd
+      run: |
         mkdir staging
-        
-        REM Ninja usually puts output directly in 'build', not 'build/Release'
         for /R build %%f in (*.pyd) do copy "%%f" staging\
-        
-        REM Grab the DLL
         copy C:\vcpkg\installed\x64-windows\bin\xerces-c*.dll staging\
         
-        echo "--- STAGING CONTENTS ---"
-        dir staging
-
     - name: Upload Artifact
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: e57_ninja_build
+        name: e57_diagnostic_build
         path: staging/*
-        if-no-files-found: error
